@@ -7,7 +7,6 @@ import (
 	"net/http"
 	"net/smtp"
 	"os"
-
 	"mailer/middleware"
 )
 
@@ -15,6 +14,26 @@ type EmailRequest struct {
 	To      string `json:"to"`
 	Subject string `json:"subject"`
 	Body    string `json:"body"`
+}
+
+var (
+	smtpHost    string
+	smtpPort    string
+	senderEmail string
+	emailAuth   smtp.Auth
+)
+
+func init() {
+	smtpHost = os.Getenv("SMTP_HOST")
+	smtpPort = os.Getenv("SMTP_PORT")
+	senderEmail = os.Getenv("GMAIL_ADDRESS")
+	senderPassword := os.Getenv("GMAIL_APP_PASSWORD")
+
+	if smtpHost == "" || smtpPort == "" || senderEmail == "" || senderPassword == "" {
+		log.Fatal("Erro: Credenciais SMTP ausentes ou incompletas.")
+	}
+
+	emailAuth = smtp.PlainAuth("", senderEmail, senderPassword, smtpHost)
 }
 
 func main() {
@@ -40,8 +59,7 @@ func sendEmailHandler(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var emailRequest EmailRequest
-	err := json.NewDecoder(r.Body).Decode(&emailRequest)
-	if err != nil {
+	if err := json.NewDecoder(r.Body).Decode(&emailRequest); err != nil {
 		http.Error(w, "Erro ao processar o corpo da solicitação", http.StatusBadRequest)
 		return
 	}
@@ -51,8 +69,7 @@ func sendEmailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	err = sendEmail(emailRequest)
-	if err != nil {
+	if err := sendEmail(emailRequest); err != nil {
 		http.Error(w, "Erro ao enviar o e-mail: "+err.Error(), http.StatusInternalServerError)
 		return
 	}
@@ -62,30 +79,20 @@ func sendEmailHandler(w http.ResponseWriter, r *http.Request) {
 }
 
 func sendEmail(request EmailRequest) error {
-	smtpHost := os.Getenv("SMTP_HOST")
-	smtpPort := os.Getenv("SMTP_PORT")
-	sender := os.Getenv("GMAIL_ADDRESS")
-	password := os.Getenv("GMAIL_APP_PASSWORD")
-
-	if sender == "" || password == "" {
-		return fmt.Errorf("Credenciais do SMTP não definidas")
-	}
-
-	auth := smtp.PlainAuth("", sender, password, smtpHost)
-
 	to := []string{request.To}
+	msg := buildEmailMessage(request)
 
-	msg := []byte("MIME-Version: 1.0\r\n" +
+	if err := smtp.SendMail(smtpHost+":"+smtpPort, emailAuth, senderEmail, to, msg); err != nil {
+		return fmt.Errorf("erro ao enviar e-mail: %v", err)
+	}
+	return nil
+}
+
+func buildEmailMessage(request EmailRequest) []byte {
+	return []byte("MIME-Version: 1.0\r\n" +
 		"Content-Type: text/html; charset=\"UTF-8\"\r\n" +
 		"To: " + request.To + "\r\n" +
 		"Subject: " + request.Subject + "\r\n" +
 		"\r\n" +
 		request.Body + "\r\n")
-
-	err := smtp.SendMail(smtpHost+":"+smtpPort, auth, sender, to, msg)
-	if err != nil {
-		return fmt.Errorf("erro ao enviar e-mail: %v", err)
-	}
-
-	return nil
 }
