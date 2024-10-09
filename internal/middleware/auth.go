@@ -5,16 +5,14 @@ import (
 	"os"
 )
 
+var expectedApiKey = os.Getenv("API_KEY")
+
 func AuthMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		apiKey := r.Header.Get("X-API-KEY")
-		expectedApiKey := os.Getenv("API_KEY")
-
-		if apiKey == "" || apiKey != expectedApiKey {
+		if r.Header.Get("X-API-KEY") != expectedApiKey {
 			http.Error(w, "Unauthorized", http.StatusUnauthorized)
 			return
 		}
-
 		next.ServeHTTP(w, r)
 	})
 }

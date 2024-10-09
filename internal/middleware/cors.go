@@ -9,7 +9,6 @@ func CORSMiddleware(next http.Handler) http.Handler {
 		w.Header().Set("Access-Control-Allow-Headers", "Content-Type, X-API-KEY, Authorization")
 
 		if r.Method == http.MethodOptions {
-			w.WriteHeader(http.StatusOK)
 			return
 		}
 
