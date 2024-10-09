@@ -8,7 +8,6 @@ import (
 	"net/mail"
 	"net/smtp"
 	"os"
-	"sync"
 	"time"
 )
 
@@ -19,24 +18,30 @@ type EmailRequest struct {
 	Body    string `json:"body"`
 }
 
-var (
-	smtpHost    = os.Getenv("SMTP_HOST")
-	smtpPort    = os.Getenv("SMTP_PORT")
-	senderEmail = os.Getenv("GMAIL_ADDRESS")
-	emailAuth   smtp.Auth
-	once        sync.Once
-)
-
-func initSMTPAuth() {
-	senderPassword := os.Getenv("GMAIL_APP_PASSWORD")
-	emailAuth = smtp.PlainAuth("", senderEmail, senderPassword, smtpHost)
+func smtpAuth(username, password, host string) smtp.Auth {
+	return smtp.PlainAuth("", username, password, host)
 }
 
-func SendEmailHandler(w http.ResponseWriter, r *http.Request) {
-	if r.Method == http.MethodOptions {
-		w.WriteHeader(http.StatusOK)
-		return
+var (
+	smtpConfigs = []SMTPConfig{
+		{Host: os.Getenv("SMTP_HOST"), Port: os.Getenv("SMTP_PORT"), Auth: smtpAuth(os.Getenv("GMAIL_ADDRESS"), os.Getenv("GMAIL_APP_PASSWORD"), os.Getenv("SMTP_HOST"))},
 	}
+	emailQueue  = make(chan EmailRequest, 100)
+	rateLimiter = time.Tick(time.Second * 1)
+	senderEmail = os.Getenv("GMAIL_ADDRESS")
+)
+
+type SMTPConfig struct {
+	Host string
+	Port string
+	Auth smtp.Auth
+}
+
+func init() {
+	go startWorker()
+}
+
+func EnqueueEmailHandler(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
 		http.Error(w, "Método não permitido", http.StatusMethodNotAllowed)
 		return
@@ -53,36 +58,51 @@ func SendEmailHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	go func() {
-		once.Do(initSMTPAuth)
-		if err := sendEmail(emailRequest); err != nil {
-			log.Printf("Erro ao enviar e-mail: %v", err)
-		} else {
-			log.Printf("E-mail enviado com sucesso para %s", emailRequest.To)
-		}
-	}()
-
-	w.WriteHeader(http.StatusOK)
-	fmt.Fprintln(w, "E-mail enviado com sucesso!")
+	emailQueue <- emailRequest
+	w.WriteHeader(http.StatusAccepted)
+	fmt.Fprintln(w, "E-mail adicionado à fila para envio.")
 }
 
-func sendEmail(request EmailRequest) error {
-	to := []string{request.To}
-	from := senderEmail
-	if request.From != "" && validateEmail(request.From) {
-		from = request.From
+func startWorker() {
+	for req := range emailQueue {
+		select {
+		case <-rateLimiter:
+			if err := sendWithRetry(req); err != nil {
+				log.Printf("Falha ao enviar e-mail após tentativas: %v", err)
+			}
+		}
 	}
+}
+
+func sendWithRetry(request EmailRequest) error {
+	for _, config := range smtpConfigs {
+		if err := sendEmail(request, config); err == nil {
+			return nil
+		}
+		log.Printf("Erro com provedor %s:%s, tentando próximo...", config.Host, config.Port)
+	}
+	return fmt.Errorf("todos os provedores falharam")
+}
+
+func sendEmail(request EmailRequest, config SMTPConfig) error {
+	from := request.From
+	if from == "" {
+		from = senderEmail
+	}
+
 	msg := buildEmailMessage(from, request)
+	to := []string{request.To}
 
 	for retries := 0; retries < 3; retries++ {
-		if err := smtp.SendMail(smtpHost+":"+smtpPort, emailAuth, from, to, msg); err != nil {
+		if err := smtp.SendMail(config.Host+":"+config.Port, config.Auth, from, to, msg); err != nil {
 			log.Printf("Tentativa %d de envio de e-mail falhou: %v", retries+1, err)
 			time.Sleep(2 * time.Second)
 		} else {
+			log.Printf("E-mail enviado com sucesso para %s", request.To)
 			return nil
 		}
 	}
-	return fmt.Errorf("falha ao enviar e-mail após várias tentativas")
+	return fmt.Errorf("falha ao enviar e-mail após tentativas")
 }
 
 func buildEmailMessage(from string, request EmailRequest) []byte {
@@ -92,7 +112,7 @@ func buildEmailMessage(from string, request EmailRequest) []byte {
 		"To: " + request.To + "\r\n" +
 		"Subject: " + request.Subject + "\r\n" +
 		"\r\n" +
-		request.Body + "\r\n")
+		request.Body)
 }
 
 func validateEmail(email string) bool {

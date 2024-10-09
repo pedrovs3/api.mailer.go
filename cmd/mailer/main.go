@@ -13,7 +13,11 @@ import (
 func main() {
 	http.Handle("/send-email",
 		middleware.CORSMiddleware(
-			middleware.AuthMiddleware(http.HandlerFunc(email.SendEmailHandler)),
+			middleware.AuthMiddleware(
+				middleware.RateLimitMiddleware(
+					http.HandlerFunc(email.EnqueueEmailHandler),
+				),
+			),
 		),
 	)
 
