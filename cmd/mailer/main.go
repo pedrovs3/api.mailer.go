@@ -3,14 +3,18 @@ package main
 import (
 	"fmt"
 	"log"
-	"net/http"
-	"os"
-
 	"mailer/internal/email"
 	"mailer/internal/middleware"
+	"net/http"
+	"os"
 )
 
 func main() {
+	http.HandleFunc("/health", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		fmt.Fprintln(w, "API is healthy")
+	})
+
 	http.Handle("/send-email",
 		middleware.CORSMiddleware(
 			middleware.AuthMiddleware(
